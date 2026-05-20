@@ -1,0 +1,6 @@
+"numpy<1.24"
+mxnet==1.9.1
+gluoncv
+networkx
+psutil
+matplotlib

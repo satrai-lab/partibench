@@ -1,0 +1,793 @@
+==== EXPERIMENTS 1ST RUN:
+
+> start node: iot_A3
+
+//- only iot_A3 (100% x 1 cpu): 430 ms
+- only iot_A3 (33% x 1 cpu): 1110 ms
+//- only iot_A3 (15% x 1 cpu): 2500 ms
+- only cloud (4 cpus): 870 ms
+
+> start node: cloud
+
+- only cloud (4 cpus): 300 ms
+
+FINDINGS:
+	- Increasing #vCPUs has small benefit on execution time
+	- My implementation of receive adds negligible extra overhead, probably overhead is from TCP. Maybe change to UDP
+	- In the iot_A3 -> cloud setup, cloud takes about 300ms only for inference. The rest 500-600ms is from send-receive overhead (i.e. 385ms receive and ~200ms send)
+		- Instead of 385ms receive overhead it should be about 180ms (for 602112 bytes in a 50mbit, 83ms link). How come the extra 200ms? TCP?
+		- UPDATE: I managed to bring the overhead down to 220ms by understanding that delay was doubled because of TCP (data exchange - ACKs from both sides). In a perfect world, using half the delay should have brought overhead down to 180ms. However, using big delays added extra overhead (again from TCP). FINALLY, decided to simulate network delays in the application level.
+	- There is also some overhead when trying to transfer application data to the TCP kernel buffer for transmission w/ sendall(). This is not negligible (may become 80ms or more). Ignore it or what?
+		- This may become a problem when trying to send to multiple destinations at the same time (e.g. at input- or filter-split). Maybe try threads and measure time, but since kernel buffer is the same, can I achieve REAL parallelism?
+	- Decided to use the more convenient TCP instead of UDP and maybe ignore some overheads at measuring
+
+==== EXPERIMENTS 2ND RUN:
+
+start node: iot_A3
+
+- only cloud (4 cpus): 600 ms (~270 ms improvement)
+- only iot_A3 (33% x 1 cpu): 1100 ms (no network involved -> no improvement)
+- only iot_A3 (other %): expected to be the same as 1st run because no network invlolved
+- only edge_A (2 cpus): 600 ms (same as cloud, benefits from closer distance)
+
+- first layer block input-split: (iot_A1 (50%), edge_A (50%)), merger: edge_A
+	other layers only edge_A
+	-> 970 ms
+
+start node: iot_B3
+
+- only cloud (4 cpus): 1500 ms
+- only iot_B3 (33% x 1 cpu): 1100 ms (expected the same as iot_A3 -- they have the same characteristics)
+
+==== EXPERIMENTS 3RD RUN -- AFTER INCREASING SOCKET BUFFER SIZES:
+
+- tried multiple placements with start node iot_A3:
+	> sendall() return time decreased to some ms
+	> return time now depends on data size and CPU power (e.g. max observed is 70ms for 12 MB of data) and NOT on buffer overflow behaviours
+
+- when data are sent to multiple destinations sequentially, is the time needed for initiating sending to one destination after the other negligible?
+	
+	> Placement:
+		- start node: iot_A3
+		- 1st block: iot_A3
+		- output of 1st block is the largest intermediate output of VGG16 (12 MB)
+		- 2nd block: filter split between several nodes
+		- other blocks: cloud
+	
+	> Measured:
+		- start time: the moment before starting sending to first destination
+		- end time (for each node): the moment after receiving the full ammount of data
+		- compared expected time (in theory) to measured time to extract overhead
+		- note: clocks between nodes are synchronised through an amazon service
+
+	> Results:
+		- when a constrained node (33% x 1 cpu) sends to few destinations (1-2), there is a little overhead added (5-10 ms)
+		- when a constrained node (33% x 1 cpu) sends to more destinations (3-4), there is more overhead added (80-100 ms)
+		- when a more powerful node (100% x 1 cpu) sends to more destinations (3-4), there is a little overhead added (5-10 ms)
+
+	> Note: after repeating the experiment by applying filter split on the 1st block (where input data size is smaller: 0.6 MB < 12 MB),
+			there is no overhead added from sending, even in a constrained node!
+	
+- measure data serialization overheads
+
+	> Placement:
+		- start node: iot_A3
+		- other blocks: switch between iot_A3 and edge_A
+
+	> Measured:
+		- time it takes to serialize (transform NDArray to numpy array and then to byte array) different NDArray shapes on constrained (iot_A3) and more powerful (edge_A) node
+
+	> Results:
+		- most serializations took 0.5 to 5 ms
+		- only first couple of serializations for each inference take more time
+			e.g. 80ms for 12 MB on constrained node or 35-40ms for 12 MB for more powerful node
+		- the following was observed:
+			First serialization of 12 MB of data took 80 ms in BLOCK process. After that the serialization of the SAME amount of data took 5 ms in a DIFFERENT process (BRIDGE).
+			Why? Processes are *spawned*, thus do NOT share memory. Maybe CPU cache? numpy/mxnet engine?
+
+
+==== EXPERIMENTS 4TH RUN -- MICROBENCHMARKING:
+
+- measure sending socket's overhead (at sequential sending) in relation to the sender's capabilities and data size sent
+
+	> Experiment: Node with (A% x 1 cpu) sends B MB to C nodes sequentially
+
+	> Configurations & Results:
+
+		(A: 100, B: 12, C: 4)
+		- 1st node: expected time: 1440 ms, measured: 1467 ms (sendall() took 4.26 ms to return)
+		- 2nd node: expected time: 1440 ms, measured: 1462 ms (sendall() took 4.24 ms to return)
+		- 3rd node: expected time: 2010 ms, measured: 2042 ms (sendall() took 4.00 ms to return)
+		- 4th node: expected time: 2010 ms, measured: 2054 ms (sendall() took 4.60 ms to return)
+
+		(A: 15, B: 12, C: 4)
+		- 1st node: expected time: 1440 ms, measured: 1457 ms (sendall() took 3.66 ms to return)
+		- 2nd node: expected time: 1440 ms, measured: 1462 ms (sendall() took 3.88 ms to return)
+		- 3rd node: expected time: 2010 ms, measured: 2051 ms (sendall() took 3.65 ms to return)
+		- 4th node: expected time: 2010 ms, measured: 2139 ms (sendall() took 3.12 ms to return)
+
+		(A: 100, B: 6, C: 4)
+		- 1st node: expected time: 700 ms, measured: 729 ms (sendall() took 1.77 ms to return)
+		- 2nd node: expected time: 700 ms, measured: 734 ms (sendall() took 2.15 ms to return)
+		- 3rd node: expected time: 980 ms, measured: 1020 ms (sendall() took 1.76 ms to return)
+		- 4th node: expected time: 980 ms, measured: 1023 ms (sendall() took 1.80 ms to return)
+
+		(A: 15, B: 6, C: 4)
+		- 1st node: expected time: 700 ms, measured: 736 ms (sendall() took 1.59 ms to return)
+		- 2nd node: expected time: 700 ms, measured: 737 ms (sendall() took 1.68 ms to return)
+		- 3rd node: expected time: 980 ms, measured: 1114 ms (sendall() took 2.98 ms to return)
+		- 4th node: expected time: 980 ms, measured: 1120 ms (sendall() took 3.98 ms to return)
+
+		(A: 100, B: 1, C: 4)
+		- 1st node: expected time: 120 ms, measured: 117 ms (sendall() took 0.30 ms to return)
+		- 2nd node: expected time: 120 ms, measured: 117 ms (sendall() took 0.61 ms to return)
+		- 3rd node: expected time: 170 ms, measured: 168 ms (sendall() took 0.26 ms to return)
+		- 4th node: expected time: 170 ms, measured: 165 ms (sendall() took 0.25 ms to return)
+
+		(A: 15, B: 1, C: 4)
+		- 1st node: expected time: 120 ms, measured: 116 ms (sendall() took 0.40 ms to return)
+		- 2nd node: expected time: 120 ms, measured: 117 ms (sendall() took 0.37 ms to return)
+		- 3rd node: expected time: 170 ms, measured: 164 ms (sendall() took 0.70 ms to return)
+		- 4th node: expected time: 170 ms, measured: 165 ms (sendall() took 0.34 ms to return)
+
+		(A: 100, B: 12, C: 2)
+		- 1st node: expected time: 1440 ms, measured: 1455 ms (sendall() took 4.16 ms to return)
+		- 2nd node: expected time: 2010 ms, measured: 2039 ms (sendall() took 3.70 ms to return)
+
+		(A: 15, B: 12, C: 2)
+		- 1st node: expected time: 1440 ms, measured: 1469 ms (sendall() took 3.23 ms to return)
+		- 2nd node: expected time: 2010 ms, measured: 2044 ms (sendall() took 3.28 ms to return)
+
+		(A: 400, B: 6, C: 4)
+		- 1st node: expected time: 480 ms, measured: 510 ms (sendall() took 2.17 ms to return)
+		- 2nd node: expected time: 480 ms, measured: 514 ms (sendall() took 2.50 ms to return)
+		- 3rd node: expected time: 480 ms, measured: 517 ms (sendall() took 2.31 ms to return)
+		- 4th node: expected time: 960 ms, measured: 1021 ms (sendall() took 1.53 ms to return)
+
+	> Observation: overhead is more sensitive to data size and less sensitive to CPU resources
+
+	> Question: is the bandwidth shaping tool (linux tc) adding the overhead in big data sizes?
+
+		- Set bandwidth between sender (4 cpus) and one of the receivers to 3 Gbit and sent 6 MB of data to all 4 nodes:
+		- Focusing on the 3 Gbit transmission: expected time: 16 ms, measured 44 ms
+
+		- Repeated the experiment but ONLY for the 3 Gbit transmission
+		- expected time: 16 ms, measured 24 ms
+
+		What if I completely remove the bandwidth shaping rules and repeat the last experiment? (single send)
+		- default bandwidth measured with iperf: ~4.62 Gbit
+		- expected time: 10 ms, measured 16 ms
+
+		- In the single send, I cannot decide since overheads are small and may not be produced by linux tc
+
+		Try sending to 4 nodes without the bandwidth shaping rules
+		- default bandwidth: 4.62 / 4 = 1.155 Gbit
+		- expected time (to each node): 41 ms, measured 33-46 ms
+
+	> FINALLY: I think that linux tc adds the overhead when data size is realtively big and there are multiple sends queued
+
+- measure NDArray serialization overhead
+
+> Experiment: Node (A% x 1 cpu) spawns 10 processes in total (that do not share memory) that serialize an NDArray of size 12 MB, waiting for B sec before spawning each process
+
+> Configurations & Results:
+
+	(A: 33, B: 0)
+	- Serialization took: 86.99274063110352 ms
+	- Serialization took: 97.42116928100586 ms
+	- Serialization took: 88.60063552856445 ms
+	- Serialization took: 90.19899368286133 ms
+	- Serialization took: 24.233579635620117 ms
+	- Serialization took: 85.64591407775879 ms
+	- Serialization took: 100.52967071533203 ms
+	- Serialization took: 27.142763137817383 ms
+	- Serialization took: 87.33749389648438 ms
+	- Serialization took: 14.085054397583008 ms
+
+	(A: 33, B: 3)
+	- Serialization took: 17.89546012878418 ms
+	- Serialization took: 28.485536575317383 ms
+	- Serialization took: 69.72122192382812 ms
+	- Serialization took: 14.354467391967773 ms
+	- Serialization took: 14.116048812866211 ms
+	- Serialization took: 14.442682266235352 ms
+	- Serialization took: 69.72074508666992 ms
+	- Serialization took: 14.913797378540039 ms
+	- Serialization took: 14.757871627807617 ms
+	- Serialization took: 14.192581176757812 ms
+
+	(A: 200, B: 0)
+	- Serialization took: 22.283077239990234 ms
+	- Serialization took: 18.160581588745117 ms
+	- Serialization took: 20.04528045654297 ms
+	- Serialization took: 15.941858291625977 ms
+	- Serialization took: 16.48092269897461 ms
+	- Serialization took: 15.863656997680664 ms
+	- Serialization took: 15.836954116821289 ms
+	- Serialization took: 16.000032424926758 ms
+	- Serialization took: 20.336151123046875 ms
+	- Serialization took: 13.239860534667969 ms
+
+	(A: 200, B: 3)
+	- Serialization took: 12.647151947021484 ms
+	- Serialization took: 21.490812301635742 ms
+	- Serialization took: 15.004634857177734 ms
+	- Serialization took: 12.567996978759766 ms
+	- Serialization took: 17.465591430664062 ms
+	- Serialization took: 13.437509536743164 ms
+	- Serialization took: 16.308069229125977 ms
+	- Serialization took: 13.997077941894531 ms
+	- Serialization took: 13.223409652709961 ms
+	- Serialization took: 12.743473052978516 ms
+
+> Observation: from the configurations above, it is shown that serialization overhead is affected by the node's current CPU usage
+
+> Question: Regarding the 12 MB serialization, is the CPU busier in BLOCK process (that serializes slower) than in BRIDGE process (that serializes faster)
+
+	- To answer, I ran an inference example (not microbenchamrking) and in the BLOCK process (that outputs 12 MB) I created a dummy output of the same size,
+	INSTEAD OF calling the "manual_inference" function that performs inference
+	- Measured that serialization overhead was ~5 ms on BOTH processes
+	- In the BLOCK process, before creating the dummy output, I also executed the inference function to check if it consumes CPU resources, even after it has returned
+		- It does not
+
+	- To sum up the cases:
+		CASE 1:
+			Firstly, BLOCK process:
+				- calls "manual_inference" and outputs 12 MB
+				- serialization of output data is SLOW
+			Then, BRIDGE process:
+				- creates NDArray from received data from BLOCK
+				- serialization of data is FAST
+		CASE 2:
+			Firstly, BLOCK process:
+				- creates dummy data of size 12 MB
+				- serialization of dummy data is FAST
+			Then, BRIDGE process:
+				- creates NDArray from received data from BLOCK
+				- serialization of data is FAST
+		CASE 3:
+			Firstly, BLOCK process:
+				- calls "manual_inference", its output is ignored
+				- creates dummy data of size 12 MB
+				- serialization of dummy data is FAST
+			Then, BRIDGE process:
+				- creates NDArray from received data from BLOCK
+				- serialization of data is FAST
+
+> FINALLY, ONLY the output of "manual_inference" function (inside BLOCK process) has SLOW serialization
+	- What if I copy the value of the output to a new NDArray object?
+	- Serialization is now FAST in the BLOCK process BUT the time cost is paid by the copying command
+	- So, SLOW serialization is due to the nature of manual_inference's output object
+
+
+==== EXPERIMENTS 5TH RUN -- AFTER IMPLEMENTING DEEP INPUT SPLIT:
+
+NOTE: From now on, graph is updated!
+
+*** MOTIVATION 1: show why DISTRIBUTED placement performs better than CENTRALISED placement
+
+A. Show the benefits of data partitioning (implemented using input split)
+
+	NOTE: Make iot nodes homogeneous (33% x 1 vCPU each)
+
+	- Since there are a lot of possible placements that employ the data partitioning strategy, it is difficult to construct an example manually when focusing on the entire CNN. Thus, we will try to isolate only a set of consecutive blocks and apply input split on them. Afterwards, we will compare the execution time of the input split partition to its centralised version.
+
+	- How deep should input split be? (i.e. how many consecutive blocks to apply input split to?)
+
+		Before deciding, it is important to know that required input size depends on the input split depth. For example, required input size (in bytes) for 25% input split of blocks:
+
+			0: 153240
+            0-1: 155928
+            0-2: 161304
+            0-3: 166680
+            0-4: 177432
+            0-5: 188184
+            0-6: 198936
+            0-7: 220440
+            0-8: 241944
+            0-9: 284952
+            0-10: 327960
+            0-11: 370968
+
+            TODO show plot here not numbers
+
+        That means that we cannot extend deep input split too much because: as required input size increases, communication costs increase and work against the benefit of workload parallelization.
+
+        What if we make deep input split very small?
+        The smaller the input split, the less the required input size (which is good). However, there is a problem: having a lot of small input split parts in the CNN increases communication costs by a lot since data transmission happens more frequently.
+
+        So, we must find a balance for the optimal input split depth.
+
+        For our case, we will choose the input split depth arbitrarily, focusing on blocks 0-6.
+
+	- How to find a good workload (input) distribution?
+
+		Assume data start from iot_A1 and let's try distributing workload to 5 nodes and set "cloud" node as the merger
+
+		Let T_i be the total time needed for node i including time to transfer data from iot_A1 to i, time to execute inference on i and time to transfer output from i to merger. Find p_i, the percentage of input that each node i must be assigned so that all nodes finish at the minimum same time T = sum(T_i). 
+
+		Ti = (exec_i + tr_i) * p_i + lat_i
+
+		where:
+			> exec_i: execution time for set of blocks on node_i
+			> tr_i: total data transmission time (without latency) for starting node -> node_i and node_i -> merger
+			> lat_i: total transmission latency for the above communications
+
+		IMPORTANT: for simplicity, this analysis assumes a linear relation between execution time and input split % for a set of blocks. E.g. if execution time for blocks 0-6 with 100% input is 150 ms, then for 10% input it should be 15 ms (theoretically). In reality this is not true because of MXNet internal functionality and overheads. Observation for cloud node: execution time for 100% input -> ~150 ms and for 10% input -> ~40 ms.
+
+		- Measure data transmission times using full inputs and outputs, EXCLUDING latencies:
+
+			> Send 602136 bytes (input image for block 0) from start node to other nodes:
+				- iot_A1 -> iot_A1: 0 ms
+				- iot_A1 -> iot_A2: 24 ms
+				- iot_A1 -> iot_A3: 24 ms
+				- iot_A1 -> edge_A: 32 ms
+				- iot_A1 -> cloud: 48 ms
+
+			> Send 802840 bytes (output of 6th block) from each node to merger:
+				- iot_A1 -> cloud: 64 ms
+				- iot_A2 -> cloud: 64 ms
+				- iot_A3 -> cloud: 64 ms
+				- edge_A -> cloud: 64 ms
+				- cloud -> cloud: 0 ms
+
+			> Total data transmission time (tr_i) for each node:
+				- iot_A1: 64 ms
+				- iot_A2: 88 ms
+				- iot_A3: 88 ms
+				- edge_A: 96 ms
+				- cloud: 48 ms
+
+		- Total latency (lat_i) for each node:
+			- iot_A1: 0 + 61 = 61 ms
+			- iot_A2: 8 + 61 = 69 ms
+			- iot_A3: 8 + 61 = 69 ms
+			- edge_A: 11 + 50 = 61 ms
+			- cloud: 61 + 0 =  61 ms
+
+		- Measure execution times (blocks 0-6):
+			- iot_A1: 789.4 ms (std: 40)
+			- iot_A2: 789.4 ms (std: 40)
+			- iot_A3: 789.4 ms (std: 40)
+			- edge_A: 290.7 ms (std: 38.5)
+			- cloud: 196.1 ms (std: 19.1)
+
+		- Calculate p_i for each node:
+
+			1. p_i = (T_i - lat_i) / (exec_i + tr_i)
+			2. sum(p_i) = 1
+
+			From 1., 2. ->
+
+			(T - 61) / 853.4 + (T - 69) / 877.4 + (T - 69) / 877.7 + (T - 61) / 386.7 + (T - 61) / 244.1 = 1
+			
+			==> ... ==> T = 161.5 ms
+
+			Substitute T into each node's equation and solve for p_i (rounded percentages):
+
+				- pi_iot_A1: 12%
+				- pi_iot_A2: 11%
+				- pi_iot_A3: 10%
+				- pi_edge_A: 26%
+				- pi_cloud: 41%
+
+		> What if we utilize less than 5 nodes? Repeat the analysis iterativelly and at each step remove the node that got assigned the least percentage. This is the node that contributes the least to the overall system (is less efficient):
+
+			Comments:
+				a. nodes with high latency are less efficient for small workload percentages because their overhead is larger relative to their contribution
+				b. nodes with high execution times will slow down the overall distribution because they take longer to process the workload
+
+			Distributions for less # of nodes:
+
+			> 4 nodes:
+
+				T = 173.2 ms
+
+				- pi_cloud: 46%
+				- pi_edge_A: 29%
+				- pi_iot_A1: 13%
+				- pi_iot_A2: 12%
+
+			> 3 nodes:
+
+				T = 188.3 ms
+				
+				- pi_cloud: 52%
+				- pi_edge_A: 33%
+				- pi_iot_A1: 15%
+
+			> 2 nodes:
+
+				T = 210.6 ms
+				
+				- pi_cloud: 61%
+				- pi_edge_A: 39%
+
+			> 1 node:
+
+				T = 305.1 ms
+				
+				- pi_cloud: 100%
+
+			As shown above, distributed placements are better than the centralised one. We only examined the cloud-only placement (and not edge-only or on-premise) because cloud is the most efficient node and will be always better than edge_A or iot_A1 alone.
+			We can observe that as we add more nodes, total time (for block 0-6) decreases. However, the decrease rate is relative to the efficiency of the node added each time. If a node with higher efficiency is added, we have a greater decrease.
+
+		> What if we had the same available nodes, but different network conditions? What if we changed the merger node? What if some nodes suddenly became busier?
+
+			The three cases are too similar on their bases, because in all three cases, total time costs (communication/execution) would change. Thus, the efficiency of each node would change and workload distribution would adjust to this change. It is also possible that some nodes may contribute negatively in the distribution, so it would be better to exclude them completely. Here is an interesting example:
+
+			>> Say that all links to/from the cloud become very slow. For the sake of this example, let's add a 80 ms second delay, on-top of the existing ones. Since cloud has now become more difficult to reach, let's set edge_A as the merger. At the same time, say that node iot_A1 is also receiving lots of requests from other iot applications, thus its excecution time (for blocks 0-6 increased from 450 ms to 650 ms). Repeating the analysis above:
+
+			- Measure data transmission times using full inputs and outputs, EXCLUDING latencies:
+
+				> Send 602136 bytes (input image for block 0) from start node to other nodes:
+					- iot_A1 -> iot_A1: 0 ms
+					- iot_A1 -> iot_A2: 24 ms
+					- iot_A1 -> iot_A3: 24 ms
+					- iot_A1 -> edge_A: 32 ms
+					- iot_A1 -> cloud: 48 ms
+
+				> Send 802840 bytes (output of 6th block) from each node to merger (edge_A this time):
+					- iot_A1 -> edge_A: 43 ms
+					- iot_A2 -> edge_A: 43 ms
+					- iot_A3 -> edge_A: 43 ms
+					- edge_A -> edge_A: 0 ms
+					- cloud -> edge_A: 64 ms
+
+				> Total data transmission time (tr_i) for each node:
+					- iot_A1: 43 ms
+					- iot_A2: 67 ms
+					- iot_A3: 67 ms
+					- edge_A: 32 ms
+					- cloud: 112 ms
+
+			- Total latency (lat_i) for each node:
+				- iot_A1: 0 + 11 = 11 ms
+				- iot_A2: 8 + 11 = 19 ms
+				- iot_A3: 8 + 11 = 19 ms
+				- edge_A: 11 + 0 = 11 ms
+				- cloud: 61 + 50 + 80 (from slow-down) =  191 ms
+
+			- Measure execution times (blocks 0-6):
+				- iot_A1: 789.4 + 200 = 989.4 ms (std: 40) (iot_A1 is busier than before)
+				- iot_A2: 789.4 ms (std: 40)
+				- iot_A3: 789.4 ms (std: 40)
+				- edge_A: 290.7 ms (std: 38.5)
+				- cloud: 196.1 ms (std: 19.1)
+
+			After repeating the same calculations as above, the percentage for cloud node becomes negative, meaning that cloud is no longer able to contribute positively to the overall system, so its better to exclude it.
+
+			Distributions for different # of nodes:
+
+			> 4 nodes:
+
+				T = 170.1 ms
+
+				- pi_edge_A: 49%
+				- pi_iot_A2: 18%
+				- pi_iot_A3: 18%
+				- pi_iot_A1: 15%
+
+			We can observe that since iot_A1 has become slower, it is now the least efficient node, even though it has the lowest communication costs associated to it. On the other hand, edge_A is favored more because a) it is the most powerful node left (since cloud is excluded) and b) it has become the merger, which decreased the communication costs associated to it i.e. it does not need to transmit any data for merging.
+
+			> 3 nodes:
+
+				T = 198.5 ms
+				
+				- pi_edge_A: 58%
+				- pi_iot_A2: 21%
+				- pi_iot_A3: 21%
+
+			> 2 nodes:
+
+				T = 247.6 ms
+				
+				- pi_edge_A: 73%
+				- pi_iot_A2: 27%
+
+			> 1 node:
+
+				T = 333.7 ms
+				
+				- pi_edge_A: 100%
+
+		As a result:
+
+		> From the analyses above, we can observe that input split is able to decrease total time (execution + communication) for a set of CNN blocks compared to centralised placements, by utilizing more computing continuum nodes by parallelizing workload, assigning each node with a different % of input to process, according to both its a) network and b) processing capabilities.
+
+		> By adapting to the network and processing capabilities of each node, input split allows for the using of weak nodes and constrained network links for the benefit of inference. These nodes would not be able to contribute positively otherwise, for example in a centralized scenario or in a scenario where pipelined model partitioning is employed, because it would be slow to transmit to them or have them compute full input amounts.
+
+		> It is obvious that the benefits of input split can be easily adopted by data partitioning with the careful configuration and selection of:
+			a) the set of nodes to participate 
+			b) the input split size (depth) for each set of blocks in the CNN
+			b) the merger node for each input split block
+
+		Consequently, data partitioning adds to the flexibility and efficiency of the CNN placement decision
+
+		
+		++++++++++++++
+		TODOs:
+		- Na metrhsw praktika tous xronous -- gia to deutero senario na mh ksexasw na allaksw to net_rules.tsv pisw sto kanoniko!!
+		- Ti allo mporw na sympairanw apo th sygkrish twn dyo parapanw analysewn?
+		- Me thn aplopoihsh tou diktyou pou ekana, poso makria eimai apo thn pragmatikothta?
+		++++++++++++++
+
+
+B. Is parallelised model partitioning (implemented using filter split) actually beneficial?
+
+	- To test this, analyze benchmarking results for multiple nodes by comparing filter split vs input split blocks (same percentage):
+
+		a. Compare execution times
+
+			- If filter split blocks are similar to or worse than input split blocks (EXPECTED), then filter split will always be worse than input split, since it needs greater input sizes (increased communication costs)
+			- If filter split blocks are better than input split blocks (NOT EXPECTED), then filter split may be better than input split, when required input is small or network capacity is high (thus communication cost is not a problem)
+
+		b. Compare memory footprint
+
+			- If filter split blocks have smaller memory footprint than input split blocks, then filter split may be useful in cases where memory is limited (NOT EXPECTED)
+			- However, if filter split blocks have greater/equal memory footprint than input split blocks, then filter split is not useful in limited memory scenarios (EXPECTED).
+			- Why is the second case more likely than the first one?
+				input split: full layer block + smaller input
+				filter split: smaller layer block + full input
+
+	- After checking benchmarking numbers:
+
+		a. About execution times:
+
+			- For most layer blocks, execution times are similar (or even worse) in filter split compared to input split. Only for a very small amount of layer blocks filter split is faster than input split. However, filter split can be employed in a single block (compared to input split that may be employed across blocks). This limitation (of filter split) increases communication overheads. This is a greater problem as filter split needs the full amount of data for processing. So, in terms of time cost, input split is more beneficial than filter split in most cases.
+
+		b. About memory footprint:
+
+			NOTE: CORRECTED THE WAY MEMORY IS MEASURED!
+			Before: for each block process, I used to write down the total RSS. However, total RSS includes memory footprint of shared libraries, shared between other block processes too.
+			After: for each block process, write down ONLY the RSS increase after block loading and inference results.
+			That means that, for the deployment of multiple blocks: consumed_RSS = shared_RSS + (block1_RSS + block2_RSS + ... + blockN_RSS)
+
+			Memory consumption (in MB) for 2 different configurations of filter & input split blocks:
+			
+			filter split 25%:	14.4, 26.4, 14.1, 17.6, 13.5, 16.0, 16.0, 19.5, 31.4, 31.4, 27.3, 27.2, 27.3, 204.5, 40.5, 31.8
+			input split 25%:	12.0, 17.0, 14.3, 15.1, 18.7, 29.4, 29.3, 44.9, 81.7, 82.0, 80.5, 80.5, 80.6, 204.6, 40.6, 31.8
+
+			filter split 75%:	20.4, 34.6, 17.9, 23.9, 21.9, 32.0, 32.0, 38.6, 68.0, 67.9, 63.3, 63.4, 63.1, 596.5, 104.6, 78.8
+			input split 75%:	19.7, 31.5, 17.9, 23.3, 22.4, 33.4, 34.4, 46.8, 85.0, 85.9, 81.0, 81.2, 81.4, 596.6, 104.6, 78.8
+
+			As observed from the memory consumption values (in MB) above, filter split has similar memory footprint compared to input split, except in some cases where filter split consumes about 50%-80% of the memory input split consumes. However, a benefit of about 50 MB at max will mostly be important for extremely memory-limited or busy nodes.
+
+		As a result:
+
+		> If there is no extreme memory limitation, then data partitioning (input split) is going to be preferred almost every time, since it can achieve workload parallelization with smaller total time costs i.e. lower communication time because of reduced data transmission and similar execution time with parallelized model partitioning (filter split)
+
+		> In a scenario where there are extreme memory limitations and at the same time there's need for privacy (i.e. keeping data as close as possible and avoid distant powerful nodes), parallelized model partitioning (filter split) may be useful. However, one should keep in mind that unless network capacity is high enough, total inference time may be adversely affected. 
+
+
+C. Show the benefits of pipelined model partitioning
+
+	iot_A1 -> 33% x 1 CPU
+
+	AIM: find a case of pipelined model partitioning that is better than each centralised case (cloud / edge / on-premise)
+
+	To assist the example, let's assume a scenario where the data producing node does not want to expose the image to the network directly (i.e. sensitive data). For that reason, we will assume that it is essential for the data producer to execute the first layer block on-premise and after that, put feature map (block output) data to the network if needed.
+
+	Let's break down each centralized case:
+
+		- cloud:
+
+			input image (0.6 MB) --on-premise--> iot_A1 [block 0] -> block 0 output (12.8 MB) --network--> cloud [blocks 1-15] -> result
+
+			> communication time: 1089 ms
+			> cloud execution time: 256.2 ms (std: 42.4)
+			> total inference time (after block 0): 1345.2 ms
+
+		- edge:
+
+			input image (0.6 MB) --on-premise--> iot_A1 [block 0] -> block 0 output (12.8 MB) --network--> edge_A [blocks 1-15] -> result
+
+			> communication time: 696 ms
+			> edge execution time: 473.2 ms (std: 55.5)
+			> total inference time (after block 0): 1169.2 ms
+
+		- on-premise:
+
+			input image (0.6 MB) --on-premise--> iot_A1 [block 0] -> block 0 output (12.8 MB) --on-premise--> iot_A1 [blocks 1-15] -> result
+
+			> communication time: 0 ms
+			> iot execution time (after block 0): 1054.8 ms (std: 45.9)
+			> total inference time (after block 0): 1054.8 ms
+
+	How to manually construct a placement that employs pipelined model partitioning and performs good?
+
+	It is true that for the optimal placement we must consider multiple parameters, including the execution and the communication time costs, COMBINED.
+
+	Following is the input size (in bytes) for each block of the CNN:
+
+	0:	602136
+    1:	12845080
+    2:	3211288
+    3:	6422552
+    4:	1605656
+    5:	3211288
+    6:	3211288
+    7:	802840
+    8:	1605656
+    9:	1605656
+    10:	401432
+    11:	401432
+    12:	401432
+    13:	100376
+    14:	16408
+    15:	16408
+
+    @plot1.png
+
+    An idea is to continue executing the CNN block by block on-premise, until the size of intermediate data reaches a low point, thus lowering communication costs.
+
+    An interesting point is between blocks 6 and 7, where the size of intermediate data is as low as 0.8 MB. However, as mentioned above, one should not consider only communication costs. If the execution cost for blocks 1-6 was significantly greater than the execution cost for blocks 7-15, then it might have been wiser to pay a little more in communication costs by splitting earlier (thus transmitting a greater sized output), but pay a lot less in execution costs since the most part of the CNN would be executed in a more powerful node. However, in our case, execution costs are roughly balanced or better stated: there is enough balance in both sides that allows us to achieve our goals for this part of the analysis. E.g. exec time on edge_A: 247.5 ms (std 50.4) for blocks 1-6 and 178.7 ms (std 42.4) for blocks 7-15.
+
+    So, let's try the following placement:
+
+    input image (0.6 MB) --on-premise--> iot_A1 [block 0] -> block 0 output (12.8 MB) --on-premise--> iot_A1 [blocks 1-6] -> intermediate output (0.8 MB) --network--> edge [blocks 7-15] -> result
+
+    > communication time (block 0 output + intermediate output): = 54 ms
+    > execution time (blocks 1-6 + blocks 7-15): 796.6 ms (std: 55.9)
+    > total inference time (after block 0): 850.6 ms
+
+    @plot2.png
+
+    We managed to bring inference time down by 204.2 ms. Surely, this may not be the optimal placement but the example shows that in some cases, pipelined model partitioning outperforms all centralized placements.
+
+
+EXTRA EXPERIMENT:
+
+> Measure CPU utilization and internal concurrency
+
+	Command: top -b -d 0.025 -n 200
+
+	Run top for 200 iterations with interval 25 ms (run it for 5 seconds)
+	After running it, execute inference with block 0-6
+
+	Measure each CPU's utilization for the following configurations:
+		- Cloud node (4 cpus) receiving 100% of the input
+		- Cloud node (4 cpus) receiving 50% of the input
+		- Edge node (2 cpus) receiving 100% of the input
+		- Edge node (2 cpus) receiving 50% of the input
+		- Iot node (0.5 cpus) receiving 100% of the input
+		- Iot node (0.5 cpus) receiving 50% of the input
+
+	Results inside cpu_utilization_exp directory
+
+
+*** MOTIVATION 2: What is the benefit of a hybrid strategy?
+
+	- To show this: show a case where hybrid is better than data partitioning alone and pipelined model partitioning alone.
+	However, it is difficult to compare data partitioning with pipelined model partitioning because each strategy may be employed with LOTS of different configurations, thus we cannot easily generalize
+
+	TODO..
+
+	NOTE: exclude parallelized model partitioning from this part of the analysis, since it is beneficial in extreme cases only
+
+
+
+
+
+
+
+
+
+
+
+
+
+		A. Show why hybrid is better than data partitioning only
+
+			Let's consider this placement from the aforementioned analysis:
+
+			start node: iot_A3
+
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": null}
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": null}
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": null}
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": null}
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": null}
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": null}
+			{"split_method": "input_split", "mapping": {"iot_A1": 0.2, "iot_A2": 0.2, "iot_A3": 0.19, "edge_A": 0.25, "edge_B": 0.16}, "merger": "edge_A"}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+			{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": "edge_A"}
+
+			Let's now focus on the entire CNN and not only on block 0-6.
+
+			- What if we extend the deep input split to blocks after block 6?
+
+				> Firstly, required input size (to each node) increases. Specifically, required input size (in bytes) for 25% input split of blocks:
+
+					0: 153240
+	                0-1: 155928
+	                0-2: 161304
+	                0-3: 166680
+	                0-4: 177432
+	                0-5: 188184
+	                0-6: 198936
+	                0-7: 220440
+	                0-8: 241944
+	                0-9: 284952
+	                0-10: 327960
+	                0-11: 370968
+	                0-12: 413976
+
+	                TODO: UPDATE WHEN BENCHMARK CODE IS FIXED!
+
+	                Thus, we cannot extend deep input split too much because: as required input size increases, communication costs increase and work against the benefit of workload parallelization.
+
+	        - What if we make deep input split smaller?
+
+	        	> The smaller the input split, the less the required input size (which is good). However, there is a problem: having a lot of small input split parts in the CNN increases communication costs by a lot since data transmission happens more frequently.
+
+	        So, we must find a balance for the optimal input split depth. In any case, at some block, we have to end deep input split and decide for the subsequent blocks. Focusing on the aforementioned placement, we have 2 main options:
+
+		        a. start a new deep input split CNN part, beginning with block 7
+
+		        	Again, the depth (num. of blocks) of the input split matters in the final inference time, but let's arbitrarily choose a depth that makes sense (not too small)
+
+		        	Repeat the analysis above to find a good distribution for blocks 7-12 (blocks 13-15 are FC so they are left out).
+
+		        	- Communication costs:
+
+			        	> Send 802840 bytes (input for block 7):
+							- edge_A -> iot_A1: 54 ms
+							- edge_A -> iot_A2: 54 ms
+							- edge_A -> iot_A3: 162 ms
+							- edge_A -> edge_A: 0 ms
+							- edge_A -> edge_B: 84 ms
+
+						> Send 100376 bytes (output of block 12):
+							- iot_A1 -> edge_A: 16 ms
+							- iot_A2 -> edge_A: 16 ms
+							- iot_A3 -> edge_A: 49 ms
+							- edge_B -> edge_A: 28 ms
+							- edge_A -> edge_A: 0 ms
+
+						> Total communication cost by each node:
+							- iot_A1: 70 ms
+							- iot_A2: 70 ms
+							- iot_A3: 211 ms
+							- edge_A: 0 ms
+							- edge_B: 112 ms
+
+					- Execution costs (blocks 7-12, with input distributed equally -- 20% each node):
+
+						- iot_A1: x ms
+						- iot_A2: x ms
+						- iot_A3: x ms
+						- edge_A: x ms
+						- edge_B: x ms
+
+
+
+
+
+
+
+
+		        b. continue without splitting (with a single node), as shown in the placement example
+
+		        	- edge_A (since data is already there -- thus no communication costs): ~110-125ms
+
+		        
+
+
+
+		        TODO: ANALYSE EACH CASE AND IF b is better, then hybrid is essential
+
+
+
+
+
+
+
+

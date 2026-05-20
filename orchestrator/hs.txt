@@ -1,0 +1,16 @@
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"iot_A1": 1}, "merger": "iot_A1"}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"edge_A": 1}, "merger": "edge_A"}

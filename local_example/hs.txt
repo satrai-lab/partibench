@@ -1,0 +1,16 @@
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_A": 1}, "merger": "node_A"}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": null}
+{"split_method": "no_split", "mapping": {"node_B": 1}, "merger": "node_B"}
