@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge-worker
+  namespace: edge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: edge-worker
+  template:
+    metadata:
+      labels:
+        app: edge-worker
+    spec:
+      nodeSelector:
+        testbed-role: Edge
+      containers:
+      - name: worker
+        image: pandora-dnn:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 6999

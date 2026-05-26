@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iot-worker
+  namespace: iot
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iot-worker
+  template:
+    metadata:
+      labels:
+        app: iot-worker
+    spec:
+      nodeSelector:
+        testbed-role: IoT
+      containers:
+      - name: worker
+        image: pandora-dnn:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 6999

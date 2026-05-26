@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: partibench-place
+  namespace: edge
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        testbed-role: Edge
+      containers:
+      - name: place
+        image: pandora-dnn:latest
+        imagePullPolicy: Never
+        command:
+        - python
+        - place.py
+        - --start-node
+        - edge
+        - --model
+        - vgg16
+        - --graph
+        - /config/cc_graph.gml
+        - --bench
+        - /config/benchmark.json
+        - --strategy
+        - hardcoded
+        - --hs
+        - /config/hs.txt
+        volumeMounts:
+        - name: partibench-place-config
+          mountPath: /config
+          readOnly: true
+      volumes:
+      - name: partibench-place-config
+        configMap:
+          name: partibench-place-config

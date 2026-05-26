@@ -1,0 +1,24 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: benchmark-edge
+  namespace: edge
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        testbed-role: Edge
+      containers:
+      - name: benchmark
+        image: pandora-dnn:latest
+        imagePullPolicy: Never
+        command: ["python", "benchmark.py", "edge", "vgg16", "True"]
+        volumeMounts:
+        - name: output-volume
+          mountPath: /output
+      volumes:
+      - name: output-volume
+        persistentVolumeClaim:
+          claimName: benchmark-output-pvc-edge  

@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: benchmark-iot
+  namespace: iot
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        testbed-role: IoT
+      containers:
+      - name: benchmark
+        image: pandora-dnn:latest
+        imagePullPolicy: Never
+        command: ["python", "benchmark.py", "iot", "vgg16", "True"]
+        volumeMounts:
+        - name: output-volume
+          mountPath: /output
+      volumes:
+      - name: output-volume
+        persistentVolumeClaim:
+          claimName: benchmark-output-pvc-iot
+

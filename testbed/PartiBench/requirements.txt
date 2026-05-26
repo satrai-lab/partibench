@@ -1,0 +1,5 @@
+mxnet==1.9.1
+gluoncv==0.10.5.post0
+numpy==1.23.5
+psutil
+networkx
