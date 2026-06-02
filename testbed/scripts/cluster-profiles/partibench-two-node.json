@@ -11,13 +11,13 @@
       "name": "Edge",
       "role": "worker",
       "cpu": "2",
-      "memory": "3Gi"
+      "memory": "14Gi"
     },
     {
       "name": "Cloud",
       "role": "worker",
-      "cpu": "3",
-      "memory": "5Gi"
+      "cpu": "4",
+      "memory": "14Gi"
     }
   ]
 }
