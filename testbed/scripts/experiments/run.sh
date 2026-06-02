@@ -10,27 +10,20 @@ Usage:
   ./scripts/experiments/run.sh <config-file> <action>
 
 Actions:
-  recreate-cluster
-  build-image
-  load-image
-  benchmark
-  deploy-workers
-  redeploy-workers
-  run-place
-  logs
-  status
-  reset
-  all
-
-The config file is a sourced bash file that defines the experiment-specific
-variables used by this runner.
+  build-image       Build the Docker worker image
+  load-image        Load the image into every Kind node
+  benchmark         Profile all nodes sequentially and collect results
+  deploy-workers    Apply worker Deployments and Services
+  redeploy-workers  Reset workers, then deploy fresh
+  run-place         Generate strategy and push component assignments to workers
+  logs              Tail logs from all worker pods
+  status            Show pod status across all namespaces
+  reset             Delete placement job, ConfigMap, and worker Deployments
+  all               Run: build-image → load-image → benchmark → deploy-workers → run-place
 EOF
 }
 
-if [[ $# -lt 2 ]]; then
-  usage
-  exit 1
-fi
+if [[ $# -lt 2 ]]; then usage; exit 1; fi
 
 CONFIG_FILE="$1"
 ACTION="$2"
@@ -39,38 +32,25 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   if [[ -f "${PROJECT_ROOT}/${CONFIG_FILE}" ]]; then
     CONFIG_FILE="${PROJECT_ROOT}/${CONFIG_FILE}"
   else
-    echo "Config file not found: $CONFIG_FILE" >&2
-    exit 1
+    echo "Config file not found: $CONFIG_FILE" >&2; exit 1
   fi
 fi
 
 # shellcheck disable=SC1090
 source "$CONFIG_FILE"
 
-required_vars=(
-  EXPERIMENT_NAME
-  CLUSTER_NAME
-  IMAGE_NAME
-  IMAGE_CONTEXT
-  NODES_FILE
-  BENCHMARK_HELPER
-  PLACE_HELPER
-)
-
-for var_name in "${required_vars[@]}"; do
-  if [[ -z "${!var_name:-}" ]]; then
-    echo "Missing required config variable: ${var_name}" >&2
-    exit 1
-  fi
+required_vars=(EXPERIMENT_NAME CLUSTER_NAME IMAGE_NAME IMAGE_CONTEXT
+               BENCHMARK_HELPER PLACE_HELPER)
+for var in "${required_vars[@]}"; do
+  [[ -z "${!var:-}" ]] && { echo "Missing required config variable: ${var}" >&2; exit 1; }
 done
 
 run_build_image() {
-  docker build -t "${IMAGE_NAME}" "${PROJECT_ROOT}/${IMAGE_CONTEXT}"
+  local context="${PROJECT_ROOT}/${IMAGE_CONTEXT}"
+  local dockerfile="${context}/${DOCKERFILE:-Dockerfile}"
+  docker build -f "${dockerfile}" -t "${IMAGE_NAME}" "${context}"
 }
-
-run_load_image() {
-  kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"
-}
+run_load_image()     { kind load docker-image "${IMAGE_NAME}" --name "${CLUSTER_NAME}"; }
 
 run_recreate_cluster() {
   kind delete cluster --name "${CLUSTER_NAME}" || true
@@ -81,103 +61,64 @@ run_deploy_workers() {
   for manifest in "${WORKER_MANIFESTS[@]}"; do
     kubectl apply -f "${PROJECT_ROOT}/${manifest}"
   done
-
   for target in "${ROLLOUT_TARGETS[@]}"; do
-    namespace="${target%%:*}"
-    resource="${target#*:}"
-    kubectl rollout status "${resource}" -n "${namespace}"
+    ns="${target%%:*}"; resource="${target#*:}"
+    kubectl rollout status "${resource}" -n "${ns}"
   done
 }
 
-run_redeploy_workers() {
-  run_reset
-  run_deploy_workers
-}
+run_redeploy_workers() { run_reset; run_deploy_workers; }
 
-run_benchmark() {
-  "${PROJECT_ROOT}/${BENCHMARK_HELPER}" "${BENCHMARK_HELPER_ARGS[@]}"
-}
+run_benchmark() { "${PROJECT_ROOT}/${BENCHMARK_HELPER}" "${BENCHMARK_HELPER_ARGS[@]}"; }
 
-run_place() {
-  "${PROJECT_ROOT}/${PLACE_HELPER}" "${PLACE_HELPER_ARGS[@]}"
-}
+run_place()     { "${PROJECT_ROOT}/${PLACE_HELPER}" "${PLACE_HELPER_ARGS[@]}"; }
 
 run_logs() {
   for target in "${LOG_TARGETS[@]}"; do
-    namespace="${target%%:*}"
-    resource="${target#*:}"
-    echo "=== ${namespace}:${resource} ==="
-    kubectl logs -n "${namespace}" "${resource}" --tail=50 || true
+    ns="${target%%:*}"; resource="${target#*:}"
+    echo "=== ${ns}:${resource} ==="
+    kubectl logs -n "${ns}" "${resource}" --tail=80 || true
   done
 }
 
 run_status() {
-  for namespace in "${STATUS_NAMESPACES[@]}"; do
-    echo "=== namespace/${namespace} ==="
-    kubectl get pods -n "${namespace}" -o wide || true
+  for ns in "${STATUS_NAMESPACES[@]}"; do
+    echo "=== namespace/${ns} ==="
+    kubectl get pods -n "${ns}" -o wide || true
   done
 }
 
 run_reset() {
-  for target in "${RESET_JOBS[@]}"; do
-    namespace="${target%%:*}"
-    name="${target#*:}"
-    kubectl delete job "${name}" -n "${namespace}" --ignore-not-found
+  for target in "${RESET_JOBS[@]:-}"; do
+    ns="${target%%:*}"; name="${target#*:}"
+    kubectl delete job "${name}" -n "${ns}" --ignore-not-found
   done
-
-  for target in "${RESET_CONFIGMAPS[@]}"; do
-    namespace="${target%%:*}"
-    name="${target#*:}"
-    kubectl delete configmap "${name}" -n "${namespace}" --ignore-not-found
+  for target in "${RESET_CONFIGMAPS[@]:-}"; do
+    ns="${target%%:*}"; name="${target#*:}"
+    kubectl delete configmap "${name}" -n "${ns}" --ignore-not-found
   done
-
-  for manifest in "${RESET_MANIFESTS[@]}"; do
+  for manifest in "${RESET_MANIFESTS[@]:-}"; do
     kubectl delete -f "${PROJECT_ROOT}/${manifest}" --ignore-not-found=true || true
   done
 }
 
 case "${ACTION}" in
-  recreate-cluster)
-    run_recreate_cluster
-    ;;
-  build-image)
-    run_build_image
-    ;;
-  load-image)
-    run_load_image
-    ;;
-  benchmark)
-    run_benchmark
-    ;;
-  deploy-workers)
-    run_deploy_workers
-    ;;
-  redeploy-workers)
-    run_redeploy_workers
-    ;;
-  run-place)
-    run_place
-    ;;
-  logs)
-    run_logs
-    ;;
-  status)
-    run_status
-    ;;
-  reset)
-    run_reset
-    ;;
+  build-image)       run_build_image ;;
+  load-image)        run_load_image ;;
+  recreate-cluster)  run_recreate_cluster ;;
+  benchmark)         run_benchmark ;;
+  deploy-workers)    run_deploy_workers ;;
+  redeploy-workers)  run_redeploy_workers ;;
+  run-place)         run_place ;;
+  logs)              run_logs ;;
+  status)            run_status ;;
+  reset)             run_reset ;;
   all)
-    run_recreate_cluster
     run_build_image
     run_load_image
     run_benchmark
     run_deploy_workers
     run_place
-    run_logs
     ;;
-  *)
-    usage
-    exit 1
-    ;;
+  *) usage; exit 1 ;;
 esac

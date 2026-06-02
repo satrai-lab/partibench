@@ -1,5 +1,5 @@
 {
-  "cluster_name": "eab-pandora-testbed",
+  "cluster_name": "partibench-testbed",
   "nodes": [
     {
       "name": "Controler",
@@ -10,14 +10,14 @@
     {
       "name": "Edge",
       "role": "worker",
-      "cpu": "4",
-      "memory": "14Gi"
+      "cpu": "2",
+      "memory": "3Gi"
     },
     {
       "name": "Cloud",
       "role": "worker",
-      "cpu": "8",
-      "memory": "14Gi"
+      "cpu": "3",
+      "memory": "5Gi"
     }
   ]
 }

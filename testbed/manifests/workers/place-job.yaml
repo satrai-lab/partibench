@@ -12,28 +12,26 @@ spec:
         testbed-role: Edge
       containers:
       - name: place
-        image: pandora-dnn:latest
+        image: partibench:latest
         imagePullPolicy: Never
         command:
-        - python
-        - place.py
-        - --start-node
-        - edge
-        - --model
-        - vgg16
-        - --graph
-        - /config/cc_graph.gml
-        - --bench
-        - /config/benchmark.json
-        - --strategy
-        - hardcoded
-        - --hs
-        - /config/hs.txt
+          - python
+          - place.py
+          - --start-node
+          - edge
+          - --model
+          - vgg16
+          - --graph
+          - /config/cc_graph.gml
+          - --bench
+          - /config/benchmark.json
+          - --hs
+          - /config/hs.txt
         volumeMounts:
-        - name: partibench-place-config
+        - name: place-config
           mountPath: /config
           readOnly: true
       volumes:
-      - name: partibench-place-config
+      - name: place-config
         configMap:
           name: partibench-place-config

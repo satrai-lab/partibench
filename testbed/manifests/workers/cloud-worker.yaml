@@ -17,7 +17,16 @@ spec:
         testbed-role: Cloud
       containers:
       - name: worker
-        image: pandora-dnn:latest
+        image: partibench:latest
         imagePullPolicy: Never
         ports:
         - containerPort: 6999
+        volumeMounts:
+        - name: net-rules
+          mountPath: /app/net_rules.tsv
+          subPath: net_rules.tsv
+      volumes:
+      - name: net-rules
+        configMap:
+          name: cloud-net-rules
+          optional: true   # pod starts with image's empty net_rules.tsv until run-place creates this

@@ -12,13 +12,18 @@ spec:
         testbed-role: Edge
       containers:
       - name: benchmark
-        image: pandora-dnn:latest
+        image: partibench:latest
         imagePullPolicy: Never
-        command: ["python", "benchmark.py", "edge", "vgg16", "True"]
+        # Run from /app so model weights download there (writable layer, not the PVC).
+        # profile_model_specifics=True: records tensor sizes and memory (one node only).
+        command:
+          - sh
+          - -c
+          - "cd /app && python benchmark.py edge vgg16 True && cp edge.json /output/edge.json"
         volumeMounts:
         - name: output-volume
           mountPath: /output
       volumes:
       - name: output-volume
         persistentVolumeClaim:
-          claimName: benchmark-output-pvc-edge  
+          claimName: benchmark-output-pvc-edge

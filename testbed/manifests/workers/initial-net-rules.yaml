@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edge-net-rules
+  namespace: edge
+data:
+  net_rules.tsv: |
+    DEST_NAME	IP	BANDWIDTH	DELAY
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-net-rules
+  namespace: cloud
+data:
+  net_rules.tsv: |
+    DEST_NAME	IP	BANDWIDTH	DELAY

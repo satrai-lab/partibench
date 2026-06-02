@@ -12,9 +12,13 @@ spec:
         testbed-role: Cloud
       containers:
       - name: benchmark
-        image: pandora-dnn:latest
+        image: partibench:latest
         imagePullPolicy: Never
-        command: ["python", "benchmark.py", "cloud", "vgg16", "True"]
+        # profile_model_specifics=False: execution times only (sizes collected from edge).
+        command:
+          - sh
+          - -c
+          - "cd /app && python benchmark.py cloud vgg16 False && cp cloud.json /output/cloud.json"
         volumeMounts:
         - name: output-volume
           mountPath: /output
