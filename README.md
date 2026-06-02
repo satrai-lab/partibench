@@ -389,6 +389,12 @@ python results/plot_paper_figures.py --bench path/to/benchmark.json --out path/t
 
 ---
 
+## Kubernetes Testbed
+
+[`testbed/`](testbed/README.md) runs the same 2-node pipelined VGG16 example inside a local [Kind](https://kind.sigs.k8s.io/) Kubernetes cluster on a single machine — no separate terminals, no loopback tricks. Each virtual node becomes a Kubernetes pod with its own CPU quota and service DNS name. The testbed README documents every file that differs from the originals above and explains why.
+
+---
+
 ## Notes and Known Limitations
 
 - **Automatic placement:** `place.py` contains a `place()` function that greedily optimises placement using benchmark data which is currently disabled in favour of `load_hardcoded_strategy()`.
